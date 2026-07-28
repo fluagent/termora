@@ -1,4 +1,5 @@
-// DbDataGrid 多行选择 + 拷贝的 widget 测试
+// DbDataGrid 多行选择 + 拷贝 + 无限滚动的 widget 测试
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -178,6 +179,80 @@ void main() {
 
     await ctrl(tester, LogicalKeyboardKey.keyC);
     expect(clip.last, '1\talice\n2\tbob\n3\tcarol');
+  });
+
+  testWidgets('空表(0 行)仍渲染列头', (tester) async {
+    await tester.pumpWidget(
+      const MaterialApp(
+        home: Scaffold(
+          body: DbDataGrid(
+            output: DbQueryOutput(columns: ['id', 'name', 'email'], rows: []),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    // 无数据行,但列头字段都在
+    expect(find.text('id'), findsOneWidget);
+    expect(find.text('name'), findsOneWidget);
+    expect(find.text('email'), findsOneWidget);
+  });
+
+  testWidgets('底部状态条:hasMore 显示提示,loadingMore 显示加载中', (tester) async {
+    Widget grid(bool loadingMore) => MaterialApp(
+      home: Scaffold(
+        body: DbDataGrid(
+          output: const DbQueryOutput(
+            columns: ['id'],
+            rows: [
+              [1],
+            ],
+          ),
+          hasMore: true,
+          loadingMore: loadingMore,
+          onLoadMore: () async {},
+        ),
+      ),
+    );
+    await tester.pumpWidget(grid(false));
+    await tester.pump();
+    expect(find.text('下滑加载更多'), findsOneWidget);
+
+    // loadingMore 有无限转圈的 CircularProgressIndicator,用 pump 而非 pumpAndSettle
+    await tester.pumpWidget(grid(true));
+    await tester.pump();
+    expect(find.text('加载中…'), findsOneWidget);
+  });
+
+  testWidgets('滚动到底触发 onLoadMore', (tester) async {
+    var calls = 0;
+    final rows = [
+      for (var i = 0; i < 200; i++) [i, 'v$i'],
+    ];
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: SizedBox(
+            height: 300,
+            child: DbDataGrid(
+              output: DbQueryOutput(columns: const ['id', 'v'], rows: rows),
+              hasMore: true,
+              onLoadMore: () async => calls++,
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    // 用鼠标滚轮向下滚(拖动会被框选拦截,故走 scroll 事件)
+    final pointer = TestPointer(1, PointerDeviceKind.mouse);
+    final center = tester.getCenter(find.byType(ListView));
+    pointer.hover(center);
+    await tester.sendEventToBinding(pointer.scroll(const Offset(0, 6000)));
+    await tester.pumpAndSettle();
+
+    expect(calls, greaterThan(0));
   });
 
   testWidgets('无选择时 Ctrl+C 不写剪贴板', (tester) async {

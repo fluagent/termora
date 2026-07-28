@@ -2,7 +2,7 @@ name: termora
 description: "Termora — 终端 / 数据库连接 桌面工具箱"
 publish_to: 'none'
 
-version: 0.0.41+43
+version: 0.0.42+44
 
 environment:
   sdk: ^3.11.5

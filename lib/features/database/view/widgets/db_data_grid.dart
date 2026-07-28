@@ -26,6 +26,9 @@ class DbDataGrid extends StatefulWidget {
     this.onHeaderTap,
     this.onHeaderFilter,
     this.filteredColumns = const {},
+    this.hasMore = false,
+    this.loadingMore = false,
+    this.onLoadMore,
   });
 
   final DbQueryOutput output;
@@ -55,6 +58,15 @@ class DbDataGrid extends StatefulWidget {
 
   /// 已有过滤条件的列(漏斗高亮)
   final Set<String> filteredColumns;
+
+  /// 还有更多数据可下滑加载(触发 [onLoadMore],底部显示提示)
+  final bool hasMore;
+
+  /// 正在加载下一页(底部转圈)
+  final bool loadingMore;
+
+  /// 滚动到底部时请求加载更多;null 时不启用无限滚动
+  final Future<void> Function()? onLoadMore;
 
   @override
   State<DbDataGrid> createState() => _DbDataGridState();
@@ -105,12 +117,31 @@ class _DbDataGridState extends State<DbDataGrid> {
   /// 总显示行数 = 原始行 + 新增行
   int get _totalRows => widget.output.rows.length + _addedCount;
 
+  /// 无限滚动:一次加载中的去重守卫(避免同一次滑动重复触发 onLoadMore)
+  bool _loadMoreInFlight = false;
+
   @override
   void initState() {
     super.initState();
     _measureColumns();
     // 编辑框内的键盘导航:Tab/Enter 提交并移到相邻格,Esc 取消
     _editFocus.onKeyEvent = _handleEditKey;
+    _vertical.addListener(_onScroll);
+  }
+
+  /// 滚动接近底部且还有更多 → 拉下一页
+  void _onScroll() {
+    if (widget.onLoadMore == null || !widget.hasMore || _loadMoreInFlight) {
+      return;
+    }
+    if (!_vertical.hasClients) return;
+    final pos = _vertical.position;
+    if (pos.pixels >= pos.maxScrollExtent - 400) {
+      _loadMoreInFlight = true;
+      widget.onLoadMore!().whenComplete(() {
+        if (mounted) _loadMoreInFlight = false;
+      });
+    }
   }
 
   @override
@@ -143,6 +174,7 @@ class _DbDataGridState extends State<DbDataGrid> {
   @override
   void dispose() {
     _autoScrollTimer?.cancel();
+    _vertical.removeListener(_onScroll);
     _horizontal.dispose();
     _vertical.dispose();
     _editController?.dispose();
@@ -625,12 +657,46 @@ class _DbDataGridState extends State<DbDataGrid> {
                         ),
                       ),
                     ),
+                    if (widget.hasMore || widget.loadingMore) _buildLoadMoreBar(),
                   ],
                 ),
               ),
             ),
           );
         },
+      ),
+    );
+  }
+
+  /// 底部无限滚动状态条:加载中转圈,否则提示下滑加载更多
+  Widget _buildLoadMoreBar() {
+    return Container(
+      height: 24,
+      width: double.infinity,
+      alignment: Alignment.center,
+      decoration: BoxDecoration(
+        color: AppTheme.subtleSurfaceColor,
+        border: Border(top: BorderSide(color: AppTheme.borderColor, width: 1)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (widget.loadingMore) ...[
+            const SizedBox(
+              width: 11,
+              height: 11,
+              child: CircularProgressIndicator(strokeWidth: 1.6),
+            ),
+            const SizedBox(width: 7),
+          ],
+          Text(
+            widget.loadingMore ? tr('加载中…') : tr('下滑加载更多'),
+            style: TextStyle(
+              fontSize: 10.5,
+              color: AppTheme.subtleTextColor,
+            ),
+          ),
+        ],
       ),
     );
   }

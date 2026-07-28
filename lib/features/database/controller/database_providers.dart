@@ -7,6 +7,8 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:termora/core/services/workspace_store.dart';
 import 'package:termora/features/database/data/connection_store.dart';
 import 'package:termora/features/database/data/db_service.dart';
+import 'package:termora/features/database/data/postgres_service.dart'
+    show PostgresService;
 import 'package:termora/features/database/data/db_metrics_service.dart';
 import 'package:termora/features/database/data/db_transfer_service.dart';
 import 'package:termora/features/database/data/db_transfer_task_store.dart';
@@ -189,6 +191,9 @@ class DbSqlState {
     this.editContext,
     DbEditSession? edits,
     this.saving = false,
+    this.baseQuery,
+    this.hasMore = false,
+    this.loadingMore = false,
   }) : edits = edits ?? DbEditSession();
 
   final bool running;
@@ -202,6 +207,15 @@ class DbSqlState {
   final DbEditSession edits;
   final bool saving;
 
+  /// 可分页的原始 SELECT(自动分页时保存,供"加载更多"续拉);null=不分页
+  final String? baseQuery;
+
+  /// 是否还有下一页(自动分页时有效)
+  final bool hasMore;
+
+  /// 正在加载下一页(下滑触发,底部转圈而非整块 spinner)
+  final bool loadingMore;
+
   bool get editable => editContext?.editable ?? false;
 
   DbSqlState copyWith({
@@ -211,6 +225,9 @@ class DbSqlState {
     DbEditContext? editContext,
     DbEditSession? edits,
     bool? saving,
+    String? baseQuery,
+    bool? hasMore,
+    bool? loadingMore,
   }) {
     return DbSqlState(
       running: running ?? this.running,
@@ -219,6 +236,9 @@ class DbSqlState {
       editContext: editContext ?? this.editContext,
       edits: edits ?? this.edits,
       saving: saving ?? this.saving,
+      baseQuery: baseQuery ?? this.baseQuery,
+      hasMore: hasMore ?? this.hasMore,
+      loadingMore: loadingMore ?? this.loadingMore,
     );
   }
 }
@@ -1126,6 +1146,38 @@ class DbSessionController extends Notifier<DbSessionsState> {
 
   // ══════════════ SQL 执行 ══════════════
 
+  /// SQL 编辑器自动分页的每页行数
+  static const int sqlPageSize = 200;
+
+  /// 若 [sql] 是可安全自动分页的单条纯 SELECT,返回去掉结尾分号的原句;
+  /// 否则 null(尊重用户自带 LIMIT、非 SELECT、多语句、FOR UPDATE 等一律不改)。
+  static String? _paginatableSelect(String sql) {
+    var s = sql.trim();
+    if (s.endsWith(';')) s = s.substring(0, s.length - 1).trimRight();
+    if (s.isEmpty) return null;
+    // 仅单条语句(分号感知拆分,正确跳过字符串/注释里的分号)
+    if (PostgresService.splitStatements(s).length != 1) return null;
+    final lower = s.toLowerCase();
+    if (!lower.startsWith('select')) return null; // 只碰纯 SELECT
+    // 用户已自带 LIMIT / 有锁定子句 → 不动
+    if (RegExp(r'\blimit\b').hasMatch(lower)) return null;
+    if (RegExp(r'\bfor\s+(update|share|no\s+key|key\s+share)').hasMatch(lower)) {
+      return null;
+    }
+    return s;
+  }
+
+  /// 从 [output] 取前 [keep] 行(自动分页时多取 1 行判有无下一页,这里裁掉)
+  static DbQueryOutput _takeRows(DbQueryOutput output, int keep) {
+    if (output.rows.length <= keep) return output;
+    return DbQueryOutput(
+      columns: output.columns,
+      rows: output.rows.sublist(0, keep),
+      affectedRows: keep,
+      elapsed: output.elapsed,
+    );
+  }
+
   Future<void> runSql(String sql) async {
     final id = state.activeId;
     if (id == null) return;
@@ -1134,6 +1186,13 @@ class DbSessionController extends Notifier<DbSessionsState> {
     if (_conns[id] == null || trimmed.isEmpty || session.sql.running) return;
 
     ref.read(dbSqlHistoryProvider.notifier).add(trimmed);
+
+    // 纯 SELECT 自动分页:只拉第一页(pageSize+1 探测是否还有更多),
+    // 避免 `SELECT * FROM 大表` 把全表拉回来直接超时。下滑再续拉。
+    final base = _paginatableSelect(trimmed);
+    final execSql = base == null
+        ? trimmed
+        : '$base\nLIMIT ${sqlPageSize + 1} OFFSET 0';
 
     final generation = _generations[id];
     _updateSession(
@@ -1144,15 +1203,24 @@ class DbSessionController extends Notifier<DbSessionsState> {
     );
 
     try {
-      final (output, editContext) = await _exec(
+      final (raw, editContext) = await _exec(
         id,
-        (conn) => DbService.runSql(conn, trimmed),
+        (conn) => DbService.runSql(conn, execSql),
       );
       if (generation != _generations[id]) return;
+      // 自动分页且真有结果集:探测下一页 + 裁掉多取的那一行
+      final paginated = base != null && raw.hasRows;
+      final hasMore = paginated && raw.rows.length > sqlPageSize;
+      final output = hasMore ? _takeRows(raw, sqlPageSize) : raw;
       _updateSession(
         id,
         (s) => s.copyWith(
-          sql: DbSqlState(output: output, editContext: editContext),
+          sql: DbSqlState(
+            output: output,
+            editContext: editContext,
+            baseQuery: paginated ? base : null,
+            hasMore: hasMore,
+          ),
         ),
       );
     } catch (e) {
@@ -1162,6 +1230,63 @@ class DbSessionController extends Notifier<DbSessionsState> {
         (s) => s.copyWith(
           sql: DbSqlState(error: _friendlyError(e), output: session.sql.output),
         ),
+      );
+    }
+  }
+
+  /// 加载 SQL 结果的下一页(下滑到底触发),把新行追加到现有结果。
+  /// 追加不改动已有行下标,故编辑缓冲仍然有效。
+  Future<void> loadMoreSql() async {
+    final id = state.activeId;
+    if (id == null) return;
+    final s = state.sessionFor(id).sql;
+    final base = s.baseQuery;
+    final current = s.output;
+    if (base == null ||
+        current == null ||
+        !s.hasMore ||
+        s.loadingMore ||
+        s.running ||
+        _conns[id] == null) {
+      return;
+    }
+
+    _updateSession(id, (st) => st.copyWith(sql: st.sql.copyWith(loadingMore: true)));
+    final generation = _generations[id];
+    final offset = current.rows.length;
+    try {
+      final (page, _) = await _exec(
+        id,
+        (conn) => DbService.runSql(
+          conn,
+          '$base\nLIMIT ${sqlPageSize + 1} OFFSET $offset',
+        ),
+      );
+      if (generation != _generations[id]) return;
+      final more = page.rows.length > sqlPageSize;
+      final newRows = more ? page.rows.sublist(0, sqlPageSize) : page.rows;
+      final merged = DbQueryOutput(
+        columns: current.columns,
+        rows: [...current.rows, ...newRows],
+        affectedRows: current.rows.length + newRows.length,
+        elapsed: current.elapsed,
+      );
+      _updateSession(
+        id,
+        (st) => st.copyWith(
+          sql: st.sql.copyWith(
+            output: merged,
+            hasMore: more,
+            loadingMore: false,
+          ),
+        ),
+      );
+    } catch (e) {
+      if (generation != _generations[id]) return;
+      // 续拉失败不毁掉已加载结果,仅停转圈(下次滑动可再试)
+      _updateSession(
+        id,
+        (st) => st.copyWith(sql: st.sql.copyWith(loadingMore: false)),
       );
     }
   }

@@ -1264,42 +1264,67 @@ class _DatabasePageState extends ConsumerState<DatabasePage> {
     final notifier = ref.read(dbSessionProvider.notifier);
     final empty = output.rows.isEmpty && tab.edits.addedRows.isEmpty;
 
-    return Column(
-      children: [
-        Expanded(
-          child: empty
-              ? Center(
-                  child: Text(
-                    tab.filter.isEmpty
-                        ? tr('表中没有数据')
-                        : tr2('没有匹配「{0}」的行', [tab.filter]),
-                    style: TextStyle(
-                      fontSize: 12.5,
-                      color: AppTheme.subtleTextColor,
+    // 空表也保留列头:结果集带列描述时始终渲染网格(表头 + 空表体),
+    // 只在表体区叠一条轻提示;仅当连列信息都没有时才用居中占位。
+    final Widget body;
+    if (!output.hasRows) {
+      body = Center(
+        child: Text(
+          tr('表中没有数据'),
+          style: TextStyle(fontSize: 12.5, color: AppTheme.subtleTextColor),
+        ),
+      );
+    } else {
+      final grid = DbDataGrid(
+        output: output,
+        editable: tab.editable,
+        edits: tab.edits,
+        sortColumn: tab.sortColumn,
+        sortAscending: tab.sortAscending,
+        filteredColumns: {for (final f in tab.columnFilters) f.column},
+        onHeaderTap: (column) => notifier.sortBy(index, column),
+        onHeaderFilter: (column, pos) =>
+            _openColumnFilter(index, tab, column, pos),
+        onCellEdit: (r, c, value, setNull) => notifier.editTabCell(
+          index,
+          rowIndex: r,
+          columnIndex: c,
+          newValue: setNull ? null : value,
+        ),
+        onToggleDelete: (r) => notifier.toggleDeleteRow(index, r),
+      );
+      body = empty
+          ? Stack(
+              children: [
+                grid,
+                // 叠在空表体上的轻提示(避开顶部列头,不拦截交互)
+                Positioned(
+                  top: 40,
+                  left: 0,
+                  right: 0,
+                  bottom: 0,
+                  child: IgnorePointer(
+                    child: Center(
+                      child: Text(
+                        tab.filter.isEmpty
+                            ? tr('表中没有数据')
+                            : tr2('没有匹配「{0}」的行', [tab.filter]),
+                        style: TextStyle(
+                          fontSize: 12.5,
+                          color: AppTheme.subtleTextColor,
+                        ),
+                      ),
                     ),
                   ),
-                )
-              : DbDataGrid(
-                  output: output,
-                  editable: tab.editable,
-                  edits: tab.edits,
-                  sortColumn: tab.sortColumn,
-                  sortAscending: tab.sortAscending,
-                  filteredColumns: {
-                    for (final f in tab.columnFilters) f.column,
-                  },
-                  onHeaderTap: (column) => notifier.sortBy(index, column),
-                  onHeaderFilter: (column, pos) =>
-                      _openColumnFilter(index, tab, column, pos),
-                  onCellEdit: (r, c, value, setNull) => notifier.editTabCell(
-                    index,
-                    rowIndex: r,
-                    columnIndex: c,
-                    newValue: setNull ? null : value,
-                  ),
-                  onToggleDelete: (r) => notifier.toggleDeleteRow(index, r),
                 ),
-        ),
+              ],
+            )
+          : grid;
+    }
+
+    return Column(
+      children: [
+        Expanded(child: body),
         if (tab.editable)
           _editActionBar(
             edits: tab.edits,
@@ -1570,30 +1595,59 @@ class _DatabasePageState extends ConsumerState<DatabasePage> {
         ),
       );
     }
-    if (!output.hasRows ||
-        (output.rows.isEmpty && sql.edits.addedRows.isEmpty)) {
+    // 无结果集(DML 等):没有列描述 → 居中提示
+    if (!output.hasRows) {
       return Center(
         child: Text(
-          output.hasRows ? tr('查询没有返回数据') : tr('语句执行成功,无返回结果集'),
+          tr('语句执行成功,无返回结果集'),
           style: TextStyle(fontSize: 12.5, color: AppTheme.subtleTextColor),
         ),
       );
     }
     final notifier = ref.read(dbSessionProvider.notifier);
+    // 有列但 0 行(如 WHERE 无匹配):保留列头,表体叠轻提示
+    final empty = output.rows.isEmpty && sql.edits.addedRows.isEmpty;
+    final grid = DbDataGrid(
+      output: output,
+      editable: sql.editable,
+      edits: sql.edits,
+      hasMore: sql.hasMore,
+      loadingMore: sql.loadingMore,
+      onLoadMore: sql.hasMore ? notifier.loadMoreSql : null,
+      onCellEdit: (r, c, value, setNull) => notifier.editSqlCell(
+        rowIndex: r,
+        columnIndex: c,
+        newValue: setNull ? null : value,
+      ),
+      onToggleDelete: (r) => notifier.toggleDeleteSqlRow(r),
+    );
     return Column(
       children: [
         Expanded(
-          child: DbDataGrid(
-            output: output,
-            editable: sql.editable,
-            edits: sql.edits,
-            onCellEdit: (r, c, value, setNull) => notifier.editSqlCell(
-              rowIndex: r,
-              columnIndex: c,
-              newValue: setNull ? null : value,
-            ),
-            onToggleDelete: (r) => notifier.toggleDeleteSqlRow(r),
-          ),
+          child: empty
+              ? Stack(
+                  children: [
+                    grid,
+                    Positioned(
+                      top: 40,
+                      left: 0,
+                      right: 0,
+                      bottom: 0,
+                      child: IgnorePointer(
+                        child: Center(
+                          child: Text(
+                            tr('查询没有返回数据'),
+                            style: TextStyle(
+                              fontSize: 12.5,
+                              color: AppTheme.subtleTextColor,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                )
+              : grid,
         ),
         if (sql.editable)
           _editActionBar(
