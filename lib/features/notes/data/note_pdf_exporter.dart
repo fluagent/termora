@@ -1,16 +1,27 @@
 import 'dart:io';
+import 'dart:math' as math;
 import 'dart:typed_data';
+import 'dart:ui' show Size;
 
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
 import 'package:termora/features/notes/domain/markdown_parser.dart';
 import 'package:termora/core/l10n/app_l10n.dart';
 
+/// 把一段 mermaid 源码渲成 PNG。PDF 是矢量文档、画不了 Flutter 画笔,
+/// 所以由调用方(界面层)把图离屏渲成位图再塞进来;返回 null = 渲染不了。
+typedef MermaidPngRenderer =
+    Future<({Uint8List bytes, Size size})?> Function(String code);
+
 /// 笔记导出 PDF(marktext 的 Export PDF)— AST → pdf 组件排版。
 /// 中文必须内嵌字体:优先加载系统 CJK TTF(macOS 的 Arial Unicode),
 /// 作为 Helvetica 系列的 fallback;找不到时拉丁文仍正常,中文会缺字。
 class NotePdfExporter {
   NotePdfExporter._();
+
+  /// 正文可用宽高(A4 减页边距),图超出就等比缩到放得下
+  static final double _contentWidth = PdfPageFormat.a4.width - 104;
+  static final double _contentHeight = PdfPageFormat.a4.height - 112;
 
   static const _cjkFontCandidates = [
     '/System/Library/Fonts/Supplemental/Arial Unicode.ttf', // macOS
@@ -39,7 +50,10 @@ class NotePdfExporter {
     return _cjk;
   }
 
-  static Future<Uint8List> export(String source) async {
+  static Future<Uint8List> export(
+    String source, {
+    MermaidPngRenderer? renderMermaid,
+  }) async {
     final cjk = _loadCjkFont();
     final fallback = [?cjk];
     final theme = pw.ThemeData.withFont(
@@ -55,6 +69,9 @@ class NotePdfExporter {
       fontSize: 9,
     );
 
+    final blocks = MarkdownParser.parse(source);
+    final diagrams = await _renderDiagrams(blocks, renderMermaid);
+
     final doc = pw.Document();
     doc.addPage(
       pw.MultiPage(
@@ -62,10 +79,10 @@ class NotePdfExporter {
         theme: theme,
         margin: const pw.EdgeInsets.symmetric(horizontal: 52, vertical: 56),
         build: (_) => [
-          for (final block in MarkdownParser.parse(source))
+          for (final block in blocks)
             pw.Padding(
               padding: const pw.EdgeInsets.only(bottom: 8),
-              child: _block(block, mono),
+              child: _block(block, mono, diagrams),
             ),
         ],
       ),
@@ -73,7 +90,47 @@ class NotePdfExporter {
     return doc.save();
   }
 
-  static pw.Widget _block(MdBlock block, pw.TextStyle mono) {
+  /// ```mermaid 块预先渲成位图(渲不出来的保持代码块原样)
+  static Future<Map<MdCodeBlock, _Diagram>> _renderDiagrams(
+    List<MdBlock> blocks,
+    MermaidPngRenderer? renderMermaid,
+  ) async {
+    final out = <MdCodeBlock, _Diagram>{};
+    if (renderMermaid == null) return out;
+    for (final block in _flatten(blocks)) {
+      if (block is! MdCodeBlock) continue;
+      if (block.language?.toLowerCase() != 'mermaid') continue;
+      final png = await renderMermaid(block.code);
+      if (png == null) continue;
+      final scale = math.min(
+        1.0,
+        math.min(
+          _contentWidth / png.size.width,
+          _contentHeight / png.size.height,
+        ),
+      );
+      out[block] = _Diagram(
+        pw.MemoryImage(png.bytes),
+        png.size.width * scale,
+        png.size.height * scale,
+      );
+    }
+    return out;
+  }
+
+  /// 引用块里也可能嵌代码块,展平后统一处理
+  static Iterable<MdBlock> _flatten(List<MdBlock> blocks) sync* {
+    for (final block in blocks) {
+      yield block;
+      if (block is MdQuote) yield* _flatten(block.children);
+    }
+  }
+
+  static pw.Widget _block(
+    MdBlock block,
+    pw.TextStyle mono,
+    Map<MdCodeBlock, _Diagram> diagrams,
+  ) {
     switch (block) {
       case MdHeading():
         final size = switch (block.level) {
@@ -105,6 +162,16 @@ class NotePdfExporter {
       case MdParagraph():
         return _richText(block.spans, mono);
       case MdCodeBlock():
+        final diagram = diagrams[block];
+        if (diagram != null) {
+          return pw.Center(
+            child: pw.Image(
+              diagram.image,
+              width: diagram.width,
+              height: diagram.height,
+            ),
+          );
+        }
         return pw.Container(
           width: double.infinity,
           padding: const pw.EdgeInsets.all(10),
@@ -129,7 +196,7 @@ class NotePdfExporter {
               for (final child in block.children)
                 pw.Padding(
                   padding: const pw.EdgeInsets.only(bottom: 4),
-                  child: _block(child, mono),
+                  child: _block(child, mono, diagrams),
                 ),
             ],
           ),
@@ -254,4 +321,12 @@ class NotePdfExporter {
         ),
     ];
   }
+}
+
+/// 预渲好的图:位图 + 落到页面上的尺寸
+class _Diagram {
+  const _Diagram(this.image, this.width, this.height);
+  final pw.MemoryImage image;
+  final double width;
+  final double height;
 }

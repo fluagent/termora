@@ -10,7 +10,11 @@ class MarkdownHtmlExport {
   /// 完整 HTML 文档
   static String exportDocument(String title, String source) {
     final body = renderBody(source);
-    final hasMath = MarkdownParser.parse(source).any((b) => b is MdMathBlock);
+    final blocks = MarkdownParser.parse(source);
+    final hasMath = blocks.any((b) => b is MdMathBlock);
+    final hasMermaid = blocks.any(
+      (b) => b is MdCodeBlock && b.language?.toLowerCase() == 'mermaid',
+    );
     return '''
 <!DOCTYPE html>
 <html lang="zh">
@@ -21,7 +25,7 @@ class MarkdownHtmlExport {
 <style>
 $_css
 </style>
-${hasMath ? _katex : ''}
+${hasMath ? _katex : ''}${hasMermaid ? _mermaid : ''}
 </head>
 <body>
 <article>
@@ -51,6 +55,11 @@ $body
         out.writeln('<p>${_inline(block.spans)}</p>');
       case MdCodeBlock():
         final lang = block.language;
+        // mermaid 交给页面里的 mermaid.js 现场渲染成图
+        if (lang?.toLowerCase() == 'mermaid') {
+          out.writeln('<pre class="mermaid">${_escape(block.code)}</pre>');
+          return;
+        }
         final cls = lang == null ? '' : ' class="language-${_escape(lang)}"';
         out.writeln('<pre><code$cls>${_escape(block.code)}</code></pre>');
       case MdQuote():
@@ -193,6 +202,21 @@ li.task { list-style: none; margin-left: -1.3em; }
 hr { border: 0; border-top: 1px solid #e2e5e0; margin: 1.6em 0; }
 img { max-width: 100%; border-radius: 8px; }
 .math { text-align: center; margin: 1.2em 0; }
+pre.mermaid {
+  background: none;
+  border: 0;
+  padding: 0;
+  text-align: center;
+  margin: 1.4em 0;
+}
+''';
+
+  /// 含图表时引入 mermaid 自动渲染(与公式一样,需要联网打开)
+  static const _mermaid = '''
+<script type="module">
+import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+mermaid.initialize({ startOnLoad: true, theme: 'neutral', securityLevel: 'strict' });
+</script>
 ''';
 
   /// 含公式时引入 KaTeX 自动渲染(需要联网打开)

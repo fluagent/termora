@@ -14,10 +14,11 @@ import 'package:toastification/toastification.dart';
 import 'package:termora/app/theme/app_theme.dart';
 import 'package:termora/core/widgets/app_toast.dart';
 import 'package:termora/features/notes/domain/markdown_parser.dart';
+import 'package:termora/features/notes/domain/mermaid/mermaid_parser.dart';
+import 'package:termora/features/notes/view/widgets/mermaid_view.dart';
 import 'package:termora/core/l10n/app_l10n.dart';
 
-/// 预览版心最大宽度(marktext 的居中窄栏排版)
-const double _kContentMaxWidth = 760;
+
 
 /// markdown 渲染预览(marktext 预览形态的 Flutter 版)
 class MarkdownPreview extends StatelessWidget {
@@ -47,21 +48,11 @@ class MarkdownPreview extends StatelessWidget {
       );
     }
     return SelectionArea(
-      child: LayoutBuilder(
-        builder: (context, constraints) {
-          final sidePadding =
-              (constraints.maxWidth - _kContentMaxWidth)
-                  .clamp(0.0, double.infinity) /
-              2;
-          final basePadding =
+      child: Builder(
+        builder: (context) {
+          final effectivePadding =
               padding?.resolve(TextDirection.ltr) ??
               const EdgeInsets.fromLTRB(32, 28, 32, 56);
-          final effectivePadding = EdgeInsets.fromLTRB(
-            basePadding.left + sidePadding,
-            basePadding.top,
-            basePadding.right + sidePadding,
-            basePadding.bottom,
-          );
           return ListView.builder(
             padding: effectivePadding,
             itemCount: blocks.length,
@@ -96,7 +87,7 @@ class MarkdownBlockView extends StatelessWidget {
     final child = switch (b) {
       MdHeading() => _heading(context, b),
       MdParagraph() => _richText(context, b.spans),
-      MdCodeBlock() => _CodeBlockView(block: b),
+      MdCodeBlock() => _codeBlock(b),
       MdQuote() => _quote(b),
       MdList() => _list(context, b),
       MdDivider() => Divider(height: 1, color: AppTheme.borderColor),
@@ -107,6 +98,15 @@ class MarkdownBlockView extends StatelessWidget {
       padding: EdgeInsets.only(top: isFirst ? 0 : _spacingAbove(b)),
       child: child,
     );
+  }
+
+  /// ```mermaid 走自绘图表;解析不了(不支持的图种/语法)回退成代码块
+  Widget _codeBlock(MdCodeBlock b) {
+    if (b.language?.toLowerCase() == 'mermaid') {
+      final diagram = MermaidParser.tryParse(b.code);
+      if (diagram != null) return MermaidBlockView(diagram: diagram);
+    }
+    return _CodeBlockView(block: b);
   }
 
   double _spacingAbove(MdBlock b) => switch (b) {
@@ -120,27 +120,27 @@ class MarkdownBlockView extends StatelessWidget {
   Widget _heading(BuildContext context, MdHeading h) {
     final style = switch (h.level) {
       1 => TextStyle(
-        fontSize: 27,
+        fontSize: 25,
         fontWeight: FontWeight.w700,
         color: AppTheme.headingColor,
         height: 1.3,
         letterSpacing: -0.4,
       ),
       2 => TextStyle(
-        fontSize: 21,
+        fontSize: 19.5,
         fontWeight: FontWeight.w700,
         color: AppTheme.headingColor,
         height: 1.3,
         letterSpacing: -0.3,
       ),
       3 => TextStyle(
-        fontSize: 17.5,
+        fontSize: 16.5,
         fontWeight: FontWeight.w600,
         color: AppTheme.headingColor,
         height: 1.3,
       ),
       _ => TextStyle(
-        fontSize: 15,
+        fontSize: 14,
         fontWeight: FontWeight.w600,
         color: AppTheme.headingColor,
         height: 1.3,
@@ -205,7 +205,7 @@ class MarkdownBlockView extends StatelessWidget {
                     item.spans,
                     baseStyle: item.checked == true
                         ? TextStyle(
-                            fontSize: 14.5,
+                            fontSize: 13.5,
                             height: 1.65,
                             color: AppTheme.subtleTextColor,
                             decoration: TextDecoration.lineThrough,
@@ -246,7 +246,7 @@ class MarkdownBlockView extends StatelessWidget {
       return Text(
         '${item.number}.',
         style: TextStyle(
-          fontSize: 14.5,
+          fontSize: 13.5,
           height: 1.65,
           color: AppTheme.subtleTextColor,
           fontFeatures: const [FontFeature.tabularFigures()],
@@ -349,7 +349,7 @@ class MarkdownBlockView extends StatelessWidget {
   }) {
     final base =
         baseStyle ??
-        TextStyle(fontSize: 14.5, height: 1.7, color: AppTheme.bodyColor);
+        TextStyle(fontSize: 13.5, height: 1.7, color: AppTheme.bodyColor);
     return Text.rich(
       TextSpan(
         style: base,

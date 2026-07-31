@@ -276,14 +276,10 @@ class _BlockEditorState extends State<BlockEditor> {
       },
       // SelectionArea:渲染块的文字可跨块拖选、⌘C 复制
       child: SelectionArea(
-        child: LayoutBuilder(
-          builder: (context, constraints) {
-            final sidePadding =
-                (constraints.maxWidth - 760).clamp(0.0, double.infinity) / 2;
-            // 内容水平内边距放在行内(而非列表),给左侧留出拖拽把手的沟槽
-            final rowPadding = EdgeInsets.symmetric(
-              horizontal: 32 + sidePadding,
-            );
+        child: Builder(
+          builder: (context) {
+            // 内容水平内边距放在行内（而非列表），给左侧留出拖拽把手的沟槽
+            const rowPadding = EdgeInsets.symmetric(horizontal: 32);
             return ReorderableListView(
               buildDefaultDragHandles: false,
               padding: const EdgeInsets.fromLTRB(0, 28, 0, 120),
@@ -299,7 +295,7 @@ class _BlockEditorState extends State<BlockEditor> {
                       padding: rowPadding,
                       child: _buildBlockEditorField(),
                     ),
-                  _buildRow(index, block, blocks, rowPadding, sidePadding),
+                  _buildRow(index, block, blocks, rowPadding),
                 ],
                 if (_insertPos != null && _insertPos! >= blocks.length)
                   Padding(
@@ -451,7 +447,7 @@ class _BlockEditorState extends State<BlockEditor> {
           maxLines: null,
           inputFormatters: [MarkdownAutoContinueFormatter()],
           style: TextStyle(
-            fontSize: 14.5,
+            fontSize: 13.5,
             height: 1.65,
             color: AppTheme.bodyColor,
           ),
@@ -461,7 +457,7 @@ class _BlockEditorState extends State<BlockEditor> {
             border: InputBorder.none,
             hintText: isInsert ? tr('写点什么…(Esc 完成)') : null,
             hintStyle: TextStyle(
-              fontSize: 14.5,
+              fontSize: 13.5,
               color: AppTheme.subtleTextColor.withValues(alpha: 0.7),
             ),
           ),

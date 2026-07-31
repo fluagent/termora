@@ -22,12 +22,14 @@ import 'package:termora/features/notes/domain/markdown_editing.dart';
 import 'package:termora/features/notes/domain/markdown_html_export.dart';
 import 'package:termora/features/notes/domain/markdown_outline.dart';
 import 'package:termora/features/notes/domain/note.dart';
+import 'package:termora/features/notes/domain/mermaid/mermaid_parser.dart';
 import 'package:termora/features/notes/domain/note_find.dart';
 import 'package:termora/features/notes/view/widgets/block_editor.dart';
 import 'package:termora/features/notes/view/widgets/editor_decorations.dart';
 import 'package:termora/features/notes/view/widgets/editor_toolbar.dart';
 import 'package:termora/features/notes/view/widgets/markdown_editing_controller.dart';
 import 'package:termora/features/notes/view/widgets/markdown_preview.dart';
+import 'package:termora/features/notes/view/widgets/mermaid_view.dart';
 import 'package:termora/core/l10n/app_l10n.dart';
 
 /// 编辑视图模式。blocks 追加在末尾保证旧的持久化下标依然有效:
@@ -461,7 +463,14 @@ class _NotesPageState extends ConsumerState<NotesPage> {
         'html' => utf8.encode(
           MarkdownHtmlExport.exportDocument(note.title, note.content),
         ),
-        'pdf' => await NotePdfExporter.export(note.content),
+        // PDF 画不了 Flutter 画笔,mermaid 交给界面层离屏渲成位图再嵌进去
+        'pdf' => await NotePdfExporter.export(
+          note.content,
+          renderMermaid: (code) async {
+            final diagram = MermaidParser.tryParse(code);
+            return diagram == null ? null : await renderMermaidPng(diagram);
+          },
+        ),
         _ => utf8.encode(note.content),
       };
       await File(finalPath).writeAsBytes(bytes);
@@ -1545,7 +1554,7 @@ class _NotesPageState extends ConsumerState<NotesPage> {
             _toast(tr2('插入失败: {0}', [e]));
           }
         },
-        // 版心居中(宽度最高 760)靠 contentPadding 实现,但那会把 TextField
+        // 版心靠 contentPadding 实现,但那会把 TextField
         // 多行时的内建滚动条推到正文右缘(而非内容区最右)。这里屏蔽内建滚动条,
         // 改由外层 Scrollbar 用同一 controller 贴编辑区最右侧绘制。
         child: Scrollbar(
@@ -1555,14 +1564,7 @@ class _NotesPageState extends ConsumerState<NotesPage> {
             child: GestureDetector(
               behavior: HitTestBehavior.translucent,
               onTap: () => _editorFocus.requestFocus(),
-              child: LayoutBuilder(
-                builder: (context, constraints) {
-                  final sidePadding =
-                      (constraints.maxWidth - 760).clamp(0.0, double.infinity) /
-                      2;
-                  return _buildTextField(sidePadding);
-                },
-              ),
+              child: _buildTextField(0),
             ),
           ),
         ),
@@ -1598,12 +1600,12 @@ class _NotesPageState extends ConsumerState<NotesPage> {
       expands: true,
       textAlignVertical: TextAlignVertical.top,
       inputFormatters: [MarkdownAutoContinueFormatter()],
-      style: TextStyle(fontSize: 14.5, height: 1.7, color: AppTheme.bodyColor),
+      style: TextStyle(fontSize: 13.5, height: 1.7, color: AppTheme.bodyColor),
       cursorColor: AppTheme.brandColor,
       decoration: InputDecoration(
         hintText: '# 标题\n\n开始书写 Markdown…',
         hintStyle: TextStyle(
-          fontSize: 14.5,
+          fontSize: 13.5,
           height: 1.7,
           color: AppTheme.subtleTextColor.withValues(alpha: 0.7),
         ),

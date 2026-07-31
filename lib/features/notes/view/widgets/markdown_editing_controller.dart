@@ -226,7 +226,7 @@ class MarkdownEditingController extends TextEditingController {
     return (style ?? const TextStyle()).copyWith(color: dim);
   }
 
-  static const _headingSizes = [21.0, 19.0, 17.5, 16.0, 15.0, 14.5];
+  static const _headingSizes = [19.5, 17.5, 16.5, 15.0, 14.0, 13.5];
 
   TextStyle _styleFor(MdSourceToken t) {
     const mono = TextStyle(
@@ -263,17 +263,17 @@ class MarkdownEditingController extends TextEditingController {
           color: AppTheme.subtleTextColor,
         );
       case MdSourceKind.codeSpan:
-        return mono.copyWith(fontSize: 13, color: AppTheme.brandColor);
+        return mono.copyWith(fontSize: 12, color: AppTheme.brandColor);
       case MdSourceKind.codeBlock:
-        // 13 × 1.9 ≈ 正文 14.5 × 1.7 的行高,块内空行(正文行高)节奏一致
+        // 12 × 1.9 ≈ 正文 13.5 × 1.7 的行高,块内空行(正文行高)节奏一致
         return mono.copyWith(
-          fontSize: 13,
+          fontSize: 12,
           height: 1.9,
           color: AppTheme.headingColor,
         );
       case MdSourceKind.math:
         return mono.copyWith(
-          fontSize: 13,
+          fontSize: 12,
           height: 1.9,
           fontStyle: FontStyle.italic,
           color: AppTheme.brandColor,
