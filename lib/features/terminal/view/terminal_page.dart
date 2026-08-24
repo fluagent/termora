@@ -3560,7 +3560,7 @@ class _TerminalSessionViewState extends ConsumerState<_TerminalSessionView>
   void _scrollToBottom() {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
-      if (!_autoFollowOutput) return;
+      if (!_autoFollowOutput && !_isAltBufferActive) return;
       if (!_scrollController.hasClients) return;
       final position = _scrollController.position;
       _scrollController.jumpTo(
@@ -3601,7 +3601,11 @@ class _TerminalSessionViewState extends ConsumerState<_TerminalSessionView>
         widget.onSyncScroll!(ratio, this);
       }
     }
-    final shouldFollow = _scrollController.position.extentAfter <= 4;
+    // Alt buffer (vim/htop/less) is a fixed grid pinned to the bottom: even if
+    // some other gesture drags the viewport off the end, auto-follow must stay
+    // on, or the last row never comes back into view.
+    final shouldFollow =
+        _isAltBufferActive || _scrollController.position.extentAfter <= 4;
     if (shouldFollow == _autoFollowOutput) return;
     _autoFollowOutput = shouldFollow;
     _publishUiState();
@@ -6647,24 +6651,36 @@ class _TerminalSessionViewState extends ConsumerState<_TerminalSessionView>
   ) {
     if (event is! PointerScrollEvent) return;
     if (event.scrollDelta.dy == 0) return;
-    if (_isMouseReportingActive) {
-      _sendTerminalMouseEvent(
-        buttonCode: event.scrollDelta.dy < 0 ? 64 : 65,
-        localPosition: event.localPosition,
-        rowIndex: rowIndex,
-        metrics: metrics,
-      );
+    if (!_isMouseReportingActive &&
+        (!_isAltBufferActive || !_alternateScrollMode)) {
       return;
     }
-    if (!_isAltBufferActive || !_alternateScrollMode) return;
-    final steps = math.max(
-      1,
-      math.min(6, (event.scrollDelta.dy.abs() / 40).ceil()),
-    );
-    final sequence = event.scrollDelta.dy < 0
-        ? _inputEncoder.cursorSequence('A', 1)
-        : _inputEncoder.cursorSequence('B', 1);
-    _sendRawInputToProcess(sequence * steps);
+    // The wheel belongs to the remote program here, so the event has to be
+    // claimed on the pointerSignalResolver. A bare onPointerSignal callback
+    // does not consume it: the enclosing Scrollable still scrolls the local
+    // viewport, _handleScrollChanged then latches _autoFollowOutput off, and
+    // from that point vim's last row (the ':' command line) stays parked
+    // outside the visible area.
+    GestureBinding.instance.pointerSignalResolver.register(event, (claimed) {
+      final scroll = claimed as PointerScrollEvent;
+      if (_isMouseReportingActive) {
+        _sendTerminalMouseEvent(
+          buttonCode: scroll.scrollDelta.dy < 0 ? 64 : 65,
+          localPosition: scroll.localPosition,
+          rowIndex: rowIndex,
+          metrics: metrics,
+        );
+        return;
+      }
+      final steps = math.max(
+        1,
+        math.min(6, (scroll.scrollDelta.dy.abs() / 40).ceil()),
+      );
+      final sequence = scroll.scrollDelta.dy < 0
+          ? _inputEncoder.cursorSequence('A', 1)
+          : _inputEncoder.cursorSequence('B', 1);
+      _sendRawInputToProcess(sequence * steps);
+    });
   }
 
   int _mouseButtonCodeForButtons(int buttons) {

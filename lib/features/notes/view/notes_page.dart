@@ -314,20 +314,49 @@ class _NotesPageState extends ConsumerState<NotesPage> {
     });
   }
 
-  /// 选中笔记变化时把内容灌进编辑器(摘监听避免自触发)
-  void _syncEditor(Note? note) {
+  /// 选中笔记变化时把内容灌进编辑器(摘监听避免自触发)。
+  /// [listQuery] = 侧栏列表的搜索词,非空时把它接力进查找条。
+  void _syncEditor(Note? note, {String listQuery = ''}) {
     if (note?.id == _editingNoteId) return;
     _editingNoteId = note?.id;
     _editorController.removeListener(_onEdited);
     _editorController.text = note?.content ?? '';
     _editorController.addListener(_onEdited);
     _scheduleFormatBarUpdate();
+    // 从列表搜索点进来的:把搜索词接力进查找条,定位并高亮正文里的命中。
+    // 否则"列表搜到了这篇"之后,用户还得在正文里把同一个词再搜一遍。
+    final query = listQuery.trim();
+    if (note != null && query.isNotEmpty) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted || _editingNoteId != note.id) return;
+        _revealListQuery(query);
+      });
+      return;
+    }
     // 换笔记后按新正文重算命中(摘了监听不会自动触发)
     if (_showFind) {
       WidgetsBinding.instance.addPostFrameCallback(
         (_) => _refreshFind(resetActive: true),
       );
     }
+  }
+
+  /// 把列表搜索词落到当前笔记:命中才展开查找条并跳到第一处。
+  /// 只有编辑模式的 buildTextSpan 会画命中底色,预览/块模式先切回编辑。
+  void _revealListQuery(String query) {
+    if (NoteFind.matches(_editorController.text, query).isEmpty) {
+      // 只在标题上命中的笔记:别让上一篇留下的高亮挂在这篇正文上
+      if (_showFind) _refreshFind(resetActive: true);
+      return;
+    }
+    if (_mode != NoteViewMode.edit) _setMode(NoteViewMode.edit);
+    _findController.text = query;
+    setState(() => _showFind = true);
+    // 定位从正文开头起算,而不是上一篇笔记留下的光标位置
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _refreshFind(resetActive: true, reveal: true);
+    });
   }
 
   void _setMode(NoteViewMode mode) {
@@ -624,7 +653,7 @@ class _NotesPageState extends ConsumerState<NotesPage> {
   @override
   Widget build(BuildContext context) {
     final state = ref.watch(notesProvider);
-    _syncEditor(state.selected);
+    _syncEditor(state.selected, listQuery: state.query);
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,

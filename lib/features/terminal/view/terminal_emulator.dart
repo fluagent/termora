@@ -1199,7 +1199,7 @@ mixin _TerminalEmulator on State<_TerminalSessionView> {
       _scrollRegionDown(_scrollTopMargin, _scrollBottomMargin, type);
     } else if (_cursorY > 0) {
       _cursorY--;
-    } else {
+    } else if (!_isAltBufferActive) {
       // 反向索引在顶部滚入的行是滚动语义,与 _scrollRegionDown 一致用 BCE
       _lines.insert(0, _blankTerminalLine(type, erase: true));
       _trimLines();
@@ -1402,7 +1402,13 @@ mixin _TerminalEmulator on State<_TerminalSessionView> {
   }
 
   void _ensureLineCount(int count, TerminalLineType type) {
-    while (_lines.length < count) {
+    // Alt buffer is a fixed rows x cols grid: out-of-range addressing/motion
+    // must clamp to the last row, never grow the buffer. Once it exceeds
+    // _ptyRows the output viewport turns scrollable, auto-follow can latch
+    // off, and vim's last row (the ':' command line) sits outside the visible
+    // area - which is exactly "typing :q neither echoes nor quits".
+    final limit = _isAltBufferActive ? math.min(count, _ptyRows) : count;
+    while (_lines.length < limit) {
       _lines.add(_blankTerminalLine(type));
     }
   }

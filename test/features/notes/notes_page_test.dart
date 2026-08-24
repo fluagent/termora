@@ -328,6 +328,44 @@ void main() {
     expect(findField, findsNothing);
   });
 
+  testWidgets('列表搜索命中后打开笔记:查找条自动带词、定位高亮', (tester) async {
+    SharedPreferences.setMockInitialValues({});
+    await pumpNotesPage(tester);
+
+    // 笔记甲:正文里有两处搜索词
+    await tester.tap(find.byIcon(LucideIcons.squarePen));
+    await tester.pumpAndSettle();
+    await tester.enterText(editorField(), '# 甲\n\n压测报告与压测结论');
+    await tester.pump(const Duration(milliseconds: 600));
+    await tester.pumpAndSettle();
+
+    // 笔记乙:不含搜索词,建完停在乙上
+    await tester.tap(find.byIcon(LucideIcons.squarePen));
+    await tester.pumpAndSettle();
+    await tester.enterText(editorField(), '# 乙\n\n无关内容');
+    await tester.pump(const Duration(milliseconds: 600));
+    await tester.pumpAndSettle();
+
+    // 侧栏搜索:列表只剩笔记甲
+    final searchField = find.byWidgetPredicate(
+      (w) => w is TextField && w.decoration?.hintText == '搜索笔记…',
+    );
+    await tester.enterText(searchField, '压测');
+    await tester.pumpAndSettle();
+    expect(find.text('甲'), findsOneWidget); // 只在列表项里(顶栏还是乙)
+
+    // 点开命中的笔记:查找条自动展开并带上搜索词,定位到第一处
+    await tester.tap(find.text('甲'));
+    await tester.pumpAndSettle();
+
+    final findField = find.byWidgetPredicate(
+      (w) => w is TextField && w.decoration?.hintText == '查找…',
+    );
+    expect(findField, findsOneWidget);
+    expect(tester.widget<TextField>(findField).controller!.text, '压测');
+    expect(find.text('1/2'), findsOneWidget);
+  });
+
   testWidgets('大纲面板:列出标题,点击跳转光标', (tester) async {
     SharedPreferences.setMockInitialValues({});
     await pumpNotesPage(tester);
