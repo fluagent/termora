@@ -2060,7 +2060,7 @@ class _TerminalSessionViewState extends ConsumerState<_TerminalSessionView>
     _publishUiState();
     unawaited(_loadHistory());
     unawaited(_loadSystemCommands());
-    if (Platform.isMacOS) {
+    if (Platform.isMacOS || Platform.isWindows) {
       unawaited(_ensureNativePtySubscription());
     }
     unawaited(_initializeWorkingDirectory().then((_) => _maybeAutoConnect()));
@@ -2276,7 +2276,7 @@ class _TerminalSessionViewState extends ConsumerState<_TerminalSessionView>
     String command,
     int commandSessionId,
   ) async {
-    if (!Platform.isMacOS || _nativePtyUnavailable) return false;
+    if (!(Platform.isMacOS || Platform.isWindows) || _nativePtyUnavailable) return false;
     try {
       await _ensureNativePtySubscription();
       final sessionId = await _nativePtyMethodChannel
@@ -4799,7 +4799,7 @@ class _TerminalSessionViewState extends ConsumerState<_TerminalSessionView>
   }
 
   String get _terminalBackendLabel {
-    if (Platform.isMacOS && !_nativePtyUnavailable) {
+    if ((Platform.isMacOS || Platform.isWindows) && !_nativePtyUnavailable) {
       return 'PTY · $_shellLabel';
     }
     return _shellLabel;

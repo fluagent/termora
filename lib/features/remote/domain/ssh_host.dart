@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:termora/core/l10n/app_l10n.dart';
 /// 一条已保存的 SSH 主机配置(WindTerm 式会话管理器的最小字段集)
 class SshHost {
@@ -31,29 +33,42 @@ class SshHost {
   String get target => user.isEmpty ? host : '$user@$host';
 
   /// 组装交给终端会话运行的 ssh 命令。
-  /// ControlMaster 让后续 SFTP/新会话复用这条已认证连接(socket 在 ~/.termora);
-  /// ssh 自己会展开 ControlPath 里的 ~,不依赖 shell 展开。
+  /// Windows 的 cmd.exe 不识别 POSIX 单引号，且 Windows OpenSSH 的
+  /// ControlPath/ControlMaster 兼容性不稳定。因此在 Windows 上以 cmd
+  /// 语法引用本地路径，并禁用连接复用。
   String sshCommand() {
+    final isWindows = Platform.isWindows;
     final parts = <String>[
       'ssh',
       '-o', 'ServerAliveInterval=30',
-      '-o', 'ControlMaster=auto',
-      '-o', 'ControlPath=~/.termora/cm-%C',
-      '-o', 'ControlPersist=10m',
+      if (!isWindows) ...[
+        '-o', 'ControlMaster=auto',
+        '-o', 'ControlPath=~/.termora/cm-%C',
+        '-o', 'ControlPersist=10m',
+      ],
       if (port != 22) ...['-p', '$port'],
-      if (keyPath.isNotEmpty) ...['-i', _quote(keyPath)],
+      if (keyPath.isNotEmpty)
+        ...['-i', _quote(_sshPath(keyPath, isWindows: isWindows), isWindows: isWindows)],
       if (extraArgs.trim().isNotEmpty) extraArgs.trim(),
-      _quote(target),
+      _quote(target, isWindows: isWindows),
     ];
     return parts.join(' ');
   }
 
-  static String _quote(String value) {
+  static String _quote(String value, {required bool isWindows}) {
     if (value.isEmpty) return value;
-    // 无特殊字符时保持可读,否则单引号包裹
+    // 无特殊字符时保持可读。
     if (RegExp(r"^[A-Za-z0-9@._\-/~:]+$").hasMatch(value)) return value;
+    // cmd.exe 不把单引号当作引号，会把它传入 ssh 的 -i 路径中。
+    // Windows 文件名不能含双引号，因此这里无需处理嵌入双引号的路径。
+    if (isWindows) return '"$value"';
     return "'${value.replaceAll("'", "'\"'\"'")}'";
   }
+
+  /// Windows OpenSSH 接受驱动器路径中的正斜杠（如 D:/keys/id.pem）。
+  /// 这能避免经过终端 PTY/cmd.exe 时，反斜杠被当成转义字符或被改写。
+  static String _sshPath(String value, {required bool isWindows}) =>
+      isWindows ? value.replaceAll(r'\', '/') : value;
 
   SshHost copyWith({
     String? name,
